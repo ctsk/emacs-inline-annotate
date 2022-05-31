@@ -12,7 +12,8 @@
 (defconst gitlens--eol-offset 5)
 (defconst gitlens--eob-offset 5)
 (defconst gitlens--idle-delay 1)
-(defconst gitlens--not-committed-hash "0000000000000000000000000000000000000000")
+(defconst gitlens--not-committed-hash
+  "0000000000000000000000000000000000000000")
 
 (defvar-local gitlens--line-lookup        nil)
 (defvar-local gitlens--hash-table         nil)
@@ -55,26 +56,53 @@
 
 (defun gitlens--prettify-time (commit-ts)
   "Pretty print the COMMIT-TS."
+    ;; seconds to time:
+    ;; 60     -> 1 min
+    ;; 120    -> 2 mins
+    ;; 3600   -> 1 hr
+    ;; 7200   -> 2 hrs
+    ;; 21600  -> 6 hrs
+    ;; 86400  -> 24 hrs
+    ;; 259200 -> 3 days
+    ;; 604800 -> 7 days = 1 week
+    ;; 1209600 -> 14 days = 2 weeks
   (let* ((current-decoded  (decode-time (current-time)))
          (commit-decoded   (decode-time commit-ts))
          (sec-diff    (- (time-convert (current-time) 'integer) commit-ts))
-         (year-diff   (- (decoded-time-year  current-decoded)
-                         (decoded-time-year  commit-decoded)))
-         (month-diff  (- (decoded-time-month current-decoded)
-                         (decoded-time-month commit-decoded))))
-    (cond ((< sec-diff 60)        "Seconds ago")
-          ((< sec-diff 120)       "One minute ago")
-          ((< sec-diff 3600)      (format "%s minutes ago" (/ sec-diff 60)))
-          ((< sec-diff 7200)      "One hour ago")
-          ((< sec-diff 86400)     (format "%s hours ago"   (/ sec-diff 3600)))
-          ((< sec-diff 172800)    "Yesterday")
-          ((< sec-diff 604800)    (format "%s days ago"    (/ sec-diff 86400)))
-          ((< sec-diff 1209600)   "Last week")
-          ((< sec-diff 2592000)   (format "%s weeks ago"   (/ sec-diff 604800)))
-          ((> year-diff  1)       (format "%s years ago"   year-diff))
-          ((= year-diff  1)       "Last year")
-          ((> month-diff 1)       (format "%s months ago"  month-diff))
-          (t                      "Last month"))))
+         (year-diff    (- (decoded-time-year current-decoded)
+                          (decoded-time-year commit-decoded)))
+         (month-diff   (mod (- (decoded-time-month current-decoded)
+                               (decoded-time-month commit-decoded))
+                            12))
+         (day-diff     (mod (- (decoded-time-day current-decoded)
+                               (decoded-time-day commit-decoded))
+                            (date-days-in-month
+                             (decoded-time-year commit-decoded)
+                             (decoded-time-month commit-decoded))))
+         (week-day     (decoded-time-weekday commit-decoded))
+         (start-of-week-diff     (+ day-diff week-day)))
+
+    (cond ((> year-diff 1)              (format "%s years ago" year-diff))
+          ((and (= year-diff 1)
+                (or (= month-diff 0)
+                    (>= month-diff 6))  "Last year"))
+          ((> month-diff 1)             (format "%s months ago" month-diff))
+          ((and (= month-diff 1)
+                (or (= day-diff 0)
+                    (>= day-diff  14))) "Last month")
+          ((>= start-of-week-diff 14)   (format "%s weeks ago"
+                                                (/ start-of-week-diff 7)))
+          ((and (>= start-of-week-diff  7)
+                (>= day-diff 3))        "Last week")
+          ((and (>= day-diff 1)
+                (>= sec-diff 21600))    "Yesterday")
+          ((>= sec-diff 7200)           (format "%s hours ago"
+                                                (/ sec-diff 3600)))
+          ((>= sec-diff 3600)           "An hour ago")
+          ((>= sec-diff 120)            (format "%s minutes ago"
+                                                (/ sec-diff 60)))
+          ((>= sec-diff 60)             "A minute ago")
+          (t                            "Seconds ago"))))
 
 (defun gitlens--format-uncommitted ()
   "What to display when the change hasn't been commited yet."
@@ -134,10 +162,10 @@
          (indentation    (max (+ gitlens--eol-offset line-end)
                               (+ gitlens--min-indent line-beg)))
          (left-pad       (make-string (- indentation line-end) ?\s))
-         (line-idx       (- (string-to-number (format-mode-line "%l")) 1)))
+         (line-idx       (string-to-number (format-mode-line "%l"))))
 
      (when (< line-idx (length gitlens--line-lookup))
-       (let* ((commit-id      (aref gitlens--line-lookup line-idx))
+       (let* ((commit-id      (aref gitlens--line-lookup (- line-idx 1)))
               (commit         (gethash commit-id gitlens--hash-table))
               (str
                (concat left-pad
