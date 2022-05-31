@@ -272,6 +272,8 @@ When buffer is nil, use the current buffer."
   (when (and (ia--should-fetch))
     (ia--fetch 'ia--fetch-callback)))
 
+
+
 ;;;###autoload
 (define-minor-mode inline-annotate-mode
   "Inline-Annotate mode."
@@ -299,6 +301,14 @@ When buffer is nil, use the current buffer."
     (remove-hook 'post-command-hook 'ia--display-cached-data)
     (remove-hook 'after-save-hook 'ia--fetch-if-cache-empty)
     (advice-remove 'select-window #'ia--refresh-on-external-change))))
+
+;;;###autoload
+(define-globalized-minor-mode
+  global-inline-annotate-mode
+  inline-annotate-mode
+  (lambda ()
+    (unless inline-annotate-mode
+      (inline-annotate-mode))))
 
 (provide 'inline-annotate)
 ;;; inline-annotate.el ends here
