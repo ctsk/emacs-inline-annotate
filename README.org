@@ -1,13 +1,7 @@
-* Annotate the current line with information from the last commit
+* Inline-Annotate
 
-** TODO Format the commit information
-*** [X] Show Author and Timestamp
-*** [X] Timestamp: Pretty print (e.g. Yesterday, 1 week ago, 1 year ago ....)
-*** [X] Author: Display "You" instead of own name
-*** [ ] Better handle uncommitted changes
-** DONE Make overlay *truly* intangible
-*** [X] Sometimes the cursor still jumps to the overlay, that shouldn't happen
-** TODO Easy way to open up commit in side buffer
-- Note: Magit can do this
-** TODO Avoid excessive rearranging of overlays when annotating a region
-** TODO Fix: Bug - Region highlight not working when cursor is on empty line
+A (small) Emacs package that adds information about past modifications to the end of the current line. Focused on being fast & uses async to avoid hanging the GUI.
+
+See also: VSCode's gitlens plugin, [[https://github.com/Artawower/blamer.el][blamer.el]]
+
+[Instructions to follow]
