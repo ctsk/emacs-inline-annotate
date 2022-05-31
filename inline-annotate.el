@@ -234,11 +234,11 @@ When buffer is nil, use the current buffer."
             (dolist (path paths)
               (load-file path))
             (let ((is-incremental t))
-              (when-let  ((blame-info (inline-annotate-async--get-blame-info
+              (when-let  ((blame-info (ia-async--get-blame-info
                                                file-name is-incremental)))
-                (cons (inline-annotate-async--get-user-name)
-                 (inline-annotate-parser--parse blame-info
-                                                line-count is-incremental)))))
+                (cons (ia-async--get-user-name)
+                 (ia-parser--parse blame-info
+                                   line-count is-incremental)))))
           (lambda (result)
             (message "Inline-Annotate: Received result.")
             (with-current-buffer buffer
