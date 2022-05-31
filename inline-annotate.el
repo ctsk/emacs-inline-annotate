@@ -24,7 +24,6 @@
 (defvar-local ia--overlays           nil)
 (defvar-local ia--generation         0)
 ;; Track a generation number to detect and ignore out-of-date async fetches
-(defvar-local ia--hooked             nil)
 
 (defvar ia--idle-timer nil)
 
@@ -38,7 +37,6 @@
 ;;
 ;; (defun ia--hash-hash (key)
 ;;   (string-to-number (substring key 0 8) 16))
-
 
 (defgroup inline-annotate nil
   "Show commit info at the end of a current line."
@@ -164,7 +162,7 @@
        (not (= (point) (point-max)))
        inline-annotate-mode))
 
-(defun ia--annotate (overlay)
+(defun ia--fill-overlay (overlay)
   "Fill OVERLAY with commit data."
   (let* ((line-beg       (line-beginning-position))
          (line-end       (line-end-position))
@@ -188,48 +186,17 @@
                                  'intangible t
                                  'cursor t))))))
 
-(defun ia--annotate-multiple ()
+(defun ia--annotate ()
   "Add overlays for a line or a region."
   (ia--clear-overlays)
-  (if (region-active-p)
-    (dolist (bounds (region-bounds))
-      (let ((start  (car bounds))
-            (end    (cdr bounds))
-            (cur-line)
-            (next-overlay ia--overlays))
-        (save-excursion
-          (goto-char start)
-          (goto-char (line-beginning-position))
-          (setq cur-line (- (string-to-number (format-mode-line "%l"))))
-          (while (and (<= (point) end) next-overlay) ;; reuse overlays
-            (unless nil ;;(aref ia--line-active-lookup cur-line)
-               ;; don't touch visible overlays
-              (when t ;;(invisible-p (car next-overlay))
-                ;; TODO Consult bitmap on whether line
-                ;; (overlay-start ov) has active overlay
-                (let ((ov       (car next-overlay))
-                      (line-end (line-end-position)))
-                  (overlay-put ov 'invisible nil)
-                  (delete-overlay ov)
-                  (move-overlay   ov line-end line-end)
-                  (ia--annotate ov)
-                  (setq next-overlay (cdr next-overlay))))
-              (next-logical-line)
-              (cl-incf cur-line)))
-          (while (and (<= (point) end))
-            (unless nil ;; (aref ia--active-lines-bv cur-line)
-              (ia--make-overlay)
-              (ia--annotate (car ia--overlays)))
-            (next-logical-line)))))
-            ;;(cl-incf cur-line)))))
-    (if ia--overlays
-      (let ((ov       (car ia--overlays))
-            (line-end (line-end-position)))
-        (delete-overlay ov)
-        (move-overlay   ov line-end line-end)
-        (ia--annotate (car ia--overlays)))
-      (ia--annotate
-       (car (ia--make-overlay))))))
+  (if ia--overlays
+     (let ((ov       (car ia--overlays))
+           (line-end (line-end-position)))
+       (delete-overlay ov)
+       (move-overlay   ov line-end line-end)
+       (ia--fill-overlay (car ia--overlays)))
+     (ia--fill-overlay
+      (car (ia--make-overlay)))))
 
 (defun ia--store (result)
   "Store the RESULT if it's still valid."
@@ -289,7 +256,7 @@ When buffer is nil, use the current buffer."
 (defun ia--display-cached-data ()
   "Display Inline-Annotate information."
   (if (ia--should-display)
-    (ia--annotate-multiple)
+    (ia--annotate)
     (ia--clear-overlays)))
 
 (defun ia--fetch-if-cache-empty ()
@@ -311,13 +278,13 @@ When buffer is nil, use the current buffer."
         ia--line-active-lookup nil
         ia--is-fetching        nil
         ia--overlays           nil
-        ia--generation         0
-        ia--hooked             nil)
+        ia--generation         0)
   (cond
    (inline-annotate-mode
     (add-hook 'after-change-functions 'ia--clear-display-and-invalidate-cache)
     (add-hook 'post-command-hook 'ia--display-cached-data)
-    (add-hook 'after-save-hook 'ia--fetch-if-cache-empty))
+    (add-hook 'after-save-hook 'ia--fetch-if-cache-empty)
+    (ia--fetch-if-cache-empty))
    (t
     (remove-hook 'after-change-functions 'ia--clear-display-and-invalidate-cache)
     (remove-hook 'post-command-hook 'ia--display-cached-data)
