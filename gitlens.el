@@ -3,9 +3,10 @@
 ;; Heavily inspired by the VSCode gitlens project and blamer.el
 ;;; Code:
 
-(require 'subr-x)
-(require 'async)
 (require 'vc)
+(require 'async)
+(require 'subr-x)
+(require 'time-date)
 (require 'gitlens-async)
 
 (defconst gitlens--min-indent 85)
@@ -36,6 +37,11 @@
 ;;
 ;; (defun gitlens--hash-hash (key)
 ;;   (string-to-number (substring key 0 8) 16))
+
+
+(defgroup gitlens nil
+  "Show commit info at the end of a current line."
+  :group 'tools)
 
 (defface gitlens-face
   '((t :foreground "#7a88cf"))
@@ -144,7 +150,8 @@
   "Decide wither gitlens should fetch blame data."
   (and (eq (vc-backend (buffer-file-name)) 'Git)
        (not (buffer-modified-p))
-       (not (gitlens--has-cache))))
+       (not (gitlens--has-cache))
+       (or gitlens-mode global-gitlens-mode)))
 
 (defun gitlens--should-display ()
   "Decide whether gitlens should annotate the current buffer."
@@ -152,7 +159,9 @@
   ;; disk version must match buffer version
   (and (eq (vc-backend (buffer-file-name)) 'Git)
        (gitlens--has-cache)
-       (not (buffer-modified-p))))
+       (not (buffer-modified-p))
+       (not (= (point) (point-max)))
+       (or gitlens-mode global-gitlens-mode)))
        ;; (not (gitlens--current-line-empty-p))))
 
 (defun gitlens--annotate (overlay)
@@ -233,7 +242,6 @@
 (defun gitlens--fetch-callback (result gen)
   "Draw Overlays with  RESULT data. GEN represents the age of the result."
   (when (= gen gitlens--generation) ;;fetch is still up to date
-    (message "Gitlens: Result is up-to-date.")
     (gitlens--store result)
     (gitlens--post-command-callback)))
 
@@ -263,7 +271,6 @@ When buffer is nil, use the current buffer."
           (with-current-buffer buffer
             (setq gitlens--is-fetching nil)
             (when result
-              (message "Gitlens: Result not empty.")
               (setq gitlens--user-name (string-trim (car result)))
               (funcall callback (cdr result) my-gen))))))))
 
@@ -293,8 +300,33 @@ When buffer is nil, use the current buffer."
 
 (defun gitlens--init ()
   "Start the idle timer."
-  (interactive)
   (run-with-idle-timer gitlens--idle-delay t 'gitlens--idle-callback))
+
+;;;###autoload
+(define-minor-mode gitlens-mode
+  "Gitlens mode."
+  :init-value nil
+  :global nil
+  :lighter nil
+  (gitlens--clear-overlays)
+  (setq gitlens--line-lookup        nil
+        gitlens--hash-table         nil
+        gitlens--user-name          nil
+        gitlens--line-active-lookup nil
+        gitlens--is-fetching        nil
+        gitlens--overlays           nil
+        gitlens--generation         0
+        gitlens--active             nil
+        gitlens--hooked             nil)
+  (gitlens--init))
+
+;;;###autoload
+(define-global-minor-mode
+  global-gitlens-mode
+  gitlens-mode
+  (lambda ()
+    (unless gitlens-mode
+      (gitlens-mode))))
 
 (provide 'gitlens)
 ;;; gitlens.el ends here
