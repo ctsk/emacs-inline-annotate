@@ -8,7 +8,7 @@
 (require 'vc)
 (require 'gitlens-async)
 
-(defconst gitlens--min-indent 50)
+(defconst gitlens--min-indent 90)
 (defconst gitlens--eol-offset 10)
 (defconst gitlens--eob-offset 5)
 
@@ -18,7 +18,9 @@
 (defvar-local gitlens--is-fetching        nil)
 (defvar-local gitlens--overlays           nil)
 (defvar-local gitlens--generation         0)
-(defvar-local gitlens--active             nil);; Track a generation number to detect and ignore out-of-date async fetches
+;; Track a generation number to detect and ignore out-of-date async fetches
+(defvar-local gitlens--active             nil)
+(defvar-local gitlens--hooked             nil)
 
 ;;
 ;; Hashless hash table
@@ -31,18 +33,27 @@
 ;;
 ;; (defun gitlens--hash-hash (key)
 ;;   (string-to-number (substring key 0 8) 16))
-;;
 
-
+(defface gitlens-face
+  '((t :foreground "#7a88cf"
+       :background nil
+       :italic t))
+  "Face for blamer info."
+  :group 'blamer)
 
 (defun gitlens--clear-overlays ()
   "Delete all overlays in the current buffer."
+  (overlay-recenter (point-max))
   (dolist (ov gitlens--overlays)
     (delete-overlay ov)))
 
 (defun gitlens--format-commit (commit)
   "Format the COMMIT."
-  (commit-summary commit))
+  (let ((summary (commit-summary commit))
+        (author  (commit-author  commit)))
+    (propertize (concat author " ⟐ " summary)
+                'face `(:inherit (gitlens-face))
+                'cursor t)))
 
 (defun gitlens--invalidate ()
   "Invalidate caches."
@@ -51,10 +62,30 @@
         gitlens--line-active-lookup nil)
   (cl-incf gitlens--generation))
 
+(defun gitlens--has-cache ()
+  "Return t if data is cached."
+  (when (and gitlens--hash-table gitlens--line-lookup) t))
+
+(defun gitlens--current-line-empty-p ()
+  "Is the current line empty?"
+  (save-excursion
+    (beginning-of-line)
+    (looking-at-p "[[:space:]]*$")))
+
+(defun gitlens--should-fetch ()
+  "Decide wither gitlens should fetch blame data."
+  (and (eq (vc-backend (buffer-file-name)) 'Git)
+       (not (buffer-modified-p))
+       (not (gitlens--has-cache))))
+
 (defun gitlens--should-display ()
   "Decide whether gitlens should annotate the current buffer."
-  (and (eq (vc-backend (buffer-file-name)) 'Git) ;; must be in git repo and backed by a file
-       (not (buffer-modified-p))))               ;; disk version must match buffer version
+  ;; must be in git repo and backed by a file
+  ;; disk version must match buffer version
+  (and (eq (vc-backend (buffer-file-name)) 'Git)
+       (gitlens--has-cache)
+       (not (buffer-modified-p))
+       (not (gitlens--current-line-empty-p))))
 
 
 (defun gitlens--annotate (overlay)
@@ -64,15 +95,17 @@
          (indentation    (max (+ gitlens--eol-offset line-end)
                               (+ gitlens--min-indent line-beg)))
          (left-pad       (make-string (- indentation line-end) ?\s))
-         (line-idx       (string-to-number (format-mode-line "%l")))
-         (commit-id      (aref gitlens--line-lookup line-idx))
-         (commit         (gethash commit-id gitlens--hash-table)))
+         (line-idx       (string-to-number (format-mode-line "%l"))))
 
-     (overlay-put overlay 'after-string
-                     (concat left-pad (gitlens--format-commit commit)))))
+     (when (< line-idx (length gitlens--line-lookup))
+       (let* ((commit-id      (aref gitlens--line-lookup line-idx))
+              (commit         (gethash commit-id gitlens--hash-table)))
+          (overlay-put overlay 'after-string
+                     (concat left-pad (gitlens--format-commit commit)))))))
 
 (defun gitlens--annotate-multiple ()
   "Add overlays for a line or a region."
+  (gitlens--clear-overlays)
   (if (region-active-p)
     (dolist (bounds (region-bounds))
       (let ((start  (car bounds))
@@ -85,8 +118,10 @@
           (setq cur-line (- (string-to-number (format-mode-line "%l"))))
           (while (and (<= (point) end) next-overlay) ;; reuse overlays
             (unless nil ;;(aref gitlens--line-active-lookup cur-line)
-              (when t   ;;(invisible-p (car next-overlay))   ;; don't touch visible overlays
-                ;; TODO Consult bitmap on whether line (overlay-start ov) has active overlay
+               ;; don't touch visible overlays
+              (when t   ;;(invisible-p (car next-overlay)) 
+                ;; TODO Consult bitmap on whether line
+                ;; (overlay-start ov) has active overlay
                 (let ((ov       (car next-overlay))
                       (line-end (line-end-position)))
                   (progn
@@ -111,25 +146,25 @@
         (delete-overlay ov)
         (move-overlay   ov line-end line-end)
         (gitlens--annotate (car gitlens--overlays)))
-      (gitlens--annotate (car (setq gitlens--overlays
-                                   (cons (make-overlay (line-end-position) (line-end-position))
+      (gitlens--annotate
+       (car (setq gitlens--overlays (cons (make-overlay (line-end-position)
+                                                        (line-end-position))
                                          gitlens--overlays)))))))
 
-(defun gitlens--display (result)
-  "Display the RESULT."
+(defun gitlens--store (result)
+  "Store the RESULT if it's still valid."
   (unless (buffer-modified-p)
     (message "Gitlens: Caching result.")
     (setq gitlens--hash-table         (car result)
           gitlens--line-lookup        (cdr result)
-          gitlens--line-active-lookup (make-vector (length (cdr result)) nil))
-    (gitlens--annotate-multiple)))
+          gitlens--line-active-lookup (make-vector (length (cdr result)) nil))))
 
 (defun gitlens--fetch-callback (result gen)
-  "What to do when done fetching and receiving result RESULT. GEN represents the age of the result."
+  "Draw Overlays with  RESULT data. GEN represents the age of the result."
   (when (= gen gitlens--generation) ;;fetch is still up to date
     (message "Gitlens: Result is up-to-date.")
-    (gitlens--display result)))
-
+    (gitlens--store result)
+    (gitlens--post-command-callback)))
 
 (defun gitlens--fetch (callback)
   "Async-fetch git blame info for the current buffer, call CALLBACK when done.
@@ -148,8 +183,9 @@ When buffer is nil, use the current buffer."
           (load-file "~/Projects/gitlens/gitlens-parser.el")
           (load-file "~/Projects/gitlens/gitlens-async.el")
           (let ((is-incremental t))
-            (when-let ((blame-info (gitlens-async--get-blame-info file-name is-incremental)))
-              (gitlens-parser--parse blame-info line-count is-incremental))))
+            (when-let  ((blame-info (gitlens-async--get-blame-info
+                                             file-name is-incremental)))
+               (gitlens-parser--parse blame-info line-count is-incremental))))
         (lambda (result)
           (message "Gitlens: Received result.")
           (with-current-buffer buffer
@@ -165,20 +201,30 @@ When buffer is nil, use the current buffer."
     (gitlens--clear-overlays)
     (gitlens--invalidate)))
 
+(defun gitlens--post-command-callback ()
+  "Display GitLens information."
+  (if (gitlens--should-display)
+    (gitlens--annotate-multiple)
+    (gitlens--clear-overlays)))
+    
+
 (defun gitlens--idle-callback ()
-  "Annotates the current buffer when idle. Fetches data when necessary."
-  (when (gitlens--should-display)
+  "Fetch annotations for the current buffer while idle."
+  (when (gitlens--should-fetch)
     (setq gitlens--active t)
-    (if (and gitlens--hash-table gitlens--line-lookup)
-        (gitlens--annotate-multiple)
-        (gitlens--fetch 'gitlens--fetch-callback))))
+    (unless gitlens--hooked
+      (add-hook 'after-change-functions 'gitlens--change-callback)
+      (add-hook 'post-command-hook 'gitlens--post-command-callback)
+      (setq gitlens--hooked t))
+    (unless (gitlens--has-cache)
+      (gitlens--fetch 'gitlens--fetch-callback))))
 
 (defun gitlens--init ()
   "Start the idle timer."
   (interactive)
-  (unless (member 'gitlens--change-callback after-change-functions)
-     (add-hook 'after-change-functions 'gitlens--change-callback))
-  (run-with-idle-timer .05 t 'gitlens--idle-callback))
+  ;; (unless (member 'gitlens--change-callback after-change-functions)
+  ;;    (add-hook 'after-change-functions 'gitlens--change-callback))
+  (run-with-idle-timer 5 t 'gitlens--idle-callback))
 
 (provide 'gitlens)
 ;;; gitlens.el ends here
