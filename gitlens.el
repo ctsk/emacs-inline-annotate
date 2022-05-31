@@ -5,6 +5,7 @@
 
 (require 'subr-x)
 (require 'async)
+(require 'vc)
 (require 'gitlens-parser)
 
 
@@ -21,11 +22,12 @@
 (defconst gitlens--eol-offset 10)
 (defconst gitlens--eob-offset 5)
 
-(defvar gitlens--line-lookup nil)
-(defvar gitlens--hash-table nil)
-(defvar gitlens--line-active-lookup nil)
-(defvar gitlens--is-fetching nil)
-(defvar gitlens--overlays nil)
+(defvar-local gitlens--line-lookup        nil)
+(defvar-local gitlens--hash-table         nil)
+(defvar-local gitlens--line-active-lookup nil)
+(defvar-local gitlens--is-fetching        nil)
+(defvar-local gitlens--overlays           nil)
+(defvar-local gitlens--generation         0)   ;; Track a generation number to detect and ignore out-of-date async fetches
 
 ;;
 ;; Hashless hash table
@@ -60,10 +62,21 @@
   "Format the COMMIT."
   (commit-summary commit))
 
+(defun gitlens--invalidate ()
+  "Invalidate caches."
+  (setq gitlens--line-lookup        nil
+        gitlens--hash-table         nil
+        gitlens--line-active-lookup nil)
+  (cl-incf gitlens--generation))
 
-(gitlens--clear-overlays)
+(defun gitlens--should-display ()
+  "Decide whether gitlens should annotate the current buffer."
+  (and (eq (vc-backend (buffer-file-name)) 'Git) ;; must be in git repo and backed by a file
+       (not (buffer-modified-p))))               ;; disk version must match buffer version
+
+
 (defun gitlens--annotate (overlay)
-  "Fill overlay with commit data."
+  "Fill OVERLAY with commit data."
   (let* ((line-beg       (line-beginning-position))
          (line-end       (line-end-position))
          (indentation    (max (+ gitlens--eol-offset line-end)
@@ -135,7 +148,8 @@
     (message "Gitlens is fetching")
     (setq gitlens--is-fetching t)
     (when-let ((file-name  (buffer-file-name))
-               (line-count (count-lines (point-min) (point-max))))
+               (line-count (count-lines (point-min) (point-max)))
+               (my-gen     gitlens--generation))
       (setq gitlens--is-fetching t)
       (async-start
         (lambda ()
@@ -147,15 +161,24 @@
               (gitlens-parser--incremental-parse blame-info line-count))))
         (lambda (result)
           (setq gitlens--is-fetching nil)
-          (message "Received result 0")
-          (when result
-            (message "Received result 1")
-            (gitlens--display result)))))))
+          (when (and result (= my-gen gitlens--generation)) ;; fetch is still up to date
+            gitlens--display result))))))
+
+
+(defun gitlens--change-callback (_start _end _pre)
+  "Reset gitlens on file change."
+  (gitlens--clear-overlays)
+  (gitlens--invalidate))
+
+(defun gitlens--idle-callback ()
+  "Annotates the current buffer when idle. Fetches data when necessary."
+  (when (gitlens--should-display)
+    (if (and gitlens--hash-table gitlens--line-lookup)
+        (gitlens--annotate-multiple)
+        (gitlens--fetch))))
 
 (defun gitlens--init ()
   "Start the idle timer."
-  (unless (buffer-modified-p)
-     (run-with-idle-timer 3 t
-                          (lambda () (if (and gitlens--hash-table gitlens--line-lookup)
-                                         (gitlens--annotate-multiple)
-                                         (gitlens--fetch))))))
+  (interactive)
+  (add-hook 'after-change-functions #'gitlens--change-callback)
+  (run-with-idle-timer 3 t #'gitlens--idle-callback))
