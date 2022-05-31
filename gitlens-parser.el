@@ -51,17 +51,20 @@
 ;; Parser helpers
 ;;
 
-(defun gitlens-parser--parse-key-value-line (key setter)
-  "If the next string is KEY call SETTER with the rest of the line as parameter."
+(defun gitlens-parser--parse-key-value-line (key setter &optional cast-to-num)
+  "If the next string is KEY call SETTER with the rest of the line as parameter. CAST-TO-NUM when set."
   (when (parsec-str key)
     (gitlens-parser--skip-ws)
-    (funcall setter (gitlens-parser--collect-line))))
+    (funcall setter (if cast-to-num
+                      (string-to-number (gitlens-parser--collect-line))
+                      (gitlens-parser--collect-line)))))
+
 
 (defun gitlens-parser--parse-header-line (commit-struct)
   "Parse a line and store it in COMMIT-STRUCT."
   (parsec-or
     (gitlens-parser--parse-key-value-line "author-mail"    (gitlens-parser--setter commit-author-mail    commit-struct))
-    (gitlens-parser--parse-key-value-line "author-time"    (gitlens-parser--setter commit-author-time    commit-struct))
+    (gitlens-parser--parse-key-value-line "author-time"    (gitlens-parser--setter commit-author-time    commit-struct) t)
     (gitlens-parser--parse-key-value-line "author-tz"      (gitlens-parser--setter commit-author-tz      commit-struct))
     (gitlens-parser--parse-key-value-line "author"         (gitlens-parser--setter commit-author         commit-struct))
     (gitlens-parser--parse-key-value-line "summary"        (gitlens-parser--setter commit-summary        commit-struct))

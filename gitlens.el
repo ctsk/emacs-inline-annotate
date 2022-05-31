@@ -8,14 +8,15 @@
 (require 'vc)
 (require 'gitlens-async)
 
-(defconst gitlens--min-indent 90)
-(defconst gitlens--eol-offset 10)
+(defconst gitlens--min-indent 85)
+(defconst gitlens--eol-offset 5)
 (defconst gitlens--eob-offset 5)
 (defconst gitlens--idle-delay 1)
 (defconst gitlens--not-committed-hash "0000000000000000000000000000000000000000")
 
 (defvar-local gitlens--line-lookup        nil)
 (defvar-local gitlens--hash-table         nil)
+(defvar-local gitlens--user-name          nil)
 (defvar-local gitlens--line-active-lookup nil)
 (defvar-local gitlens--is-fetching        nil)
 (defvar-local gitlens--overlays           nil)
@@ -24,7 +25,6 @@
 (defvar-local gitlens--active             nil)
 (defvar-local gitlens--hooked             nil)
 
-;;
 ;; Hashless hash table
 ;; Idea: We don't need to rehash the git commit hashes
 ;;
@@ -37,7 +37,7 @@
 ;;   (string-to-number (substring key 0 8) 16))
 
 (defface gitlens-face
-  '((default :foreground "#7a88cf"))
+  '((t :foreground "#7a88cf"))
   "Face for blamer info.")
 
 (defun gitlens--clear-overlays ()
@@ -53,7 +53,6 @@
     (overlay-put new-ov 'intangible t)
     (setq gitlens--overlays (cons new-ov gitlens--overlays))))
 
-
 (defun gitlens--prettify-time (commit-ts)
   "Pretty print the COMMIT-TS."
   (let* ((current-decoded  (decode-time (current-time)))
@@ -63,7 +62,7 @@
                          (decoded-time-year  commit-decoded)))
          (month-diff  (- (decoded-time-month current-decoded)
                          (decoded-time-month commit-decoded))))
-    (cond ((< sec-diff 60)        "seconds ago")
+    (cond ((< sec-diff 60)        "Seconds ago")
           ((< sec-diff 120)       "One minute ago")
           ((< sec-diff 3600)      (format "%s minutes ago" (/ sec-diff 60)))
           ((< sec-diff 7200)      "One hour ago")
@@ -81,14 +80,17 @@
   "What to display when the change hasn't been commited yet."
   (propertize "You ⟐ Not Committed Yet"
               'face `(:inherit (gitlens-face))
+              'intangible t
               'cursor t))
 
 (defun gitlens--format-commit (commit)
   "Format the COMMIT."
   (let ((summary (commit-summary commit))
         (author  (commit-author  commit))
-        (commit-t))
-    (propertize (concat " ⟐ " author " ⟐ " summary)
+        (commit-ts (gitlens--prettify-time (commit-author-time commit))))
+    (when (string= author gitlens--user-name)
+      (setq author "You"))
+    (propertize (concat author " ⟐ " commit-ts " ⟐ " summary)
                 'face `(:inherit (gitlens-face))
                 'intangible t
                 'cursor t)))
@@ -122,9 +124,8 @@
   ;; disk version must match buffer version
   (and (eq (vc-backend (buffer-file-name)) 'Git)
        (gitlens--has-cache)
-       (not (buffer-modified-p))
-       (not (gitlens--current-line-empty-p))))
-
+       (not (buffer-modified-p))))
+       ;; (not (gitlens--current-line-empty-p))))
 
 (defun gitlens--annotate (overlay)
   "Fill OVERLAY with commit data."
@@ -133,7 +134,7 @@
          (indentation    (max (+ gitlens--eol-offset line-end)
                               (+ gitlens--min-indent line-beg)))
          (left-pad       (make-string (- indentation line-end) ?\s))
-         (line-idx       (string-to-number (format-mode-line "%l"))))
+         (line-idx       (- (string-to-number (format-mode-line "%l")) 1)))
 
      (when (< line-idx (length gitlens--line-lookup))
        (let* ((commit-id      (aref gitlens--line-lookup line-idx))
@@ -143,12 +144,12 @@
                        (if (string= commit-id gitlens--not-committed-hash)
                           (gitlens--format-uncommitted)
                           (gitlens--format-commit commit)))))
-         (overlay-put overlay 'intangible  t)
          (overlay-put overlay
-                      'after-string (propertize str
-                                               'face `(:inherit (gitlens-face))
-                                               'intangible t
-                                               'cursor t))))))
+                      'after-string
+                      (propertize str
+                                 'face `(:inherit (gitlens-face))
+                                 'intangible t
+                                 'cursor t))))))
 
 (defun gitlens--annotate-multiple ()
   "Add overlays for a line or a region."
@@ -166,17 +167,16 @@
           (while (and (<= (point) end) next-overlay) ;; reuse overlays
             (unless nil ;;(aref gitlens--line-active-lookup cur-line)
                ;; don't touch visible overlays
-              (when t   ;;(invisible-p (car next-overlay)) 
+              (when t ;;(invisible-p (car next-overlay))
                 ;; TODO Consult bitmap on whether line
                 ;; (overlay-start ov) has active overlay
                 (let ((ov       (car next-overlay))
                       (line-end (line-end-position)))
-                  (progn
-                    (overlay-put ov 'invisible nil)
-                    (delete-overlay ov)
-                    (move-overlay   ov line-end line-end)
-                    (gitlens--annotate ov)
-                    (setq next-overlay (cdr next-overlay)))))
+                  (overlay-put ov 'invisible nil)
+                  (delete-overlay ov)
+                  (move-overlay   ov line-end line-end)
+                  (gitlens--annotate ov)
+                  (setq next-overlay (cdr next-overlay))))
               (next-logical-line)
               (cl-incf cur-line)))
           (while (and (<= (point) end))
@@ -228,14 +228,16 @@ When buffer is nil, use the current buffer."
           (let ((is-incremental t))
             (when-let  ((blame-info (gitlens-async--get-blame-info
                                              file-name is-incremental)))
-               (gitlens-parser--parse blame-info line-count is-incremental))))
+              (cons (gitlens-async--get-user-name)
+               (gitlens-parser--parse blame-info line-count is-incremental)))))
         (lambda (result)
           (message "Gitlens: Received result.")
           (with-current-buffer buffer
             (setq gitlens--is-fetching nil)
             (when result
               (message "Gitlens: Result not empty.")
-              (funcall callback result my-gen))))))))
+              (setq gitlens--user-name (string-trim (car result)))
+              (funcall callback (cdr result) my-gen))))))))
 
 (defun gitlens--change-callback (_start _end _pre)
   "Reset gitlens on file change."
