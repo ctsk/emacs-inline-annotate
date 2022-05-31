@@ -252,10 +252,11 @@ When buffer is nil, use the current buffer."
 
 (defun ia--detect-external-change ()
   "Return t if an external change to the file or repo happend."
-  (let ((last-commit-time
-         (seconds-to-time
-          (string-to-number
-           (shell-command-to-string "git log -1 --format=%ct")))))
+  (let ((last-commit-time (thread-last "git log -1 --format=%ct"
+                            (shell-command-to-string)
+                            (string-to-number)
+                            (seconds-to-time))))
+
     (or (time-less-p ia--cache-age last-commit-time)
         (not (verify-visited-file-modtime)))))
 
