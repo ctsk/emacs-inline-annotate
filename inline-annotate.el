@@ -18,6 +18,7 @@
 
 (defvar-local ia--line-lookup        nil)
 (defvar-local ia--hash-table         nil)
+(defvar-local ia--cache-age          nil)
 (defvar-local ia--user-name          nil)
 (defvar-local ia--line-active-lookup nil)
 (defvar-local ia--is-fetching        nil)
@@ -201,11 +202,12 @@
 (defun ia--store (result)
   "Store the RESULT if it's still valid."
   (unless (buffer-modified-p)
-    (message "Inline-Annotate: Caching result.")
     (setq ia--hash-table         (car result)
           ia--line-lookup        (cdr result)
           ia--line-active-lookup
-          (make-vector (length (cdr result)) nil))))
+          (make-vector (length (cdr result)) nil)
+          ia--cache-age          (current-time))
+    (message "Inline-Annotate: Done fetching.")))
 
 (defun ia--fetch-callback (result gen)
   "Draw Overlays with  RESULT data. GEN represents the age of the result."
@@ -226,7 +228,6 @@ When buffer is nil, use the current buffer."
                (paths        (list (locate-library "parsec")
                                    (locate-library "inline-annotate-parser")
                                    (locate-library "inline-annotate-async"))))
-      (message (number-to-string (length paths)))
       (setq ia--is-fetching t)
       (unwind-protect
         (async-start
@@ -240,7 +241,6 @@ When buffer is nil, use the current buffer."
                  (ia-parser--parse blame-info
                                    line-count is-incremental)))))
           (lambda (result)
-            (message "Inline-Annotate: Received result.")
             (with-current-buffer buffer
               (setq ia--is-fetching nil)
               (when result
@@ -248,7 +248,7 @@ When buffer is nil, use the current buffer."
                 (funcall callback (cdr result) my-gen)))))
         (setq ia--is-fetching nil)))))
 
-(defun ia--clear-display-and-invalidate-cache (_start _end _pre)
+(defun ia--clear-display-and-invalidate-cache (&rest _trail)
   "Reset inline-annotate on file change."
   (ia--clear-overlays)
   (ia--invalidate))
@@ -258,6 +258,22 @@ When buffer is nil, use the current buffer."
   (if (ia--should-display)
     (ia--annotate)
     (ia--clear-overlays)))
+
+(defun ia--detect-external-change ()
+  "Return t if an external change to the file or repo happend."
+  (let ((last-commit-time
+         (seconds-to-time
+          (string-to-number
+           (shell-command-to-string "git log -1 --format=%ct")))))
+    (or (time-less-p ia--cache-age last-commit-time)
+        (not (verify-visited-file-modtime)))))
+
+
+(defun ia--refresh-on-external-change (&rest _trail)
+  "Refresh cache and display if an external change occured."
+  (when (ia--detect-external-change)
+    (ia--clear-display-and-invalidate-cache)
+    (ia--fetch-if-cache-empty)))
 
 (defun ia--fetch-if-cache-empty ()
   "Fetch annotations for the current buffer while idle."
@@ -279,16 +295,19 @@ When buffer is nil, use the current buffer."
         ia--is-fetching        nil
         ia--overlays           nil
         ia--generation         0)
+
   (cond
    (inline-annotate-mode
     (add-hook 'after-change-functions 'ia--clear-display-and-invalidate-cache)
     (add-hook 'post-command-hook 'ia--display-cached-data)
     (add-hook 'after-save-hook 'ia--fetch-if-cache-empty)
+    (advice-add 'select-window :after #'ia--refresh-on-external-change)
     (ia--fetch-if-cache-empty))
    (t
     (remove-hook 'after-change-functions 'ia--clear-display-and-invalidate-cache)
     (remove-hook 'post-command-hook 'ia--display-cached-data)
-    (remove-hook 'after-save-hook 'ia--fetch-if-cache-empty))))
+    (remove-hook 'after-save-hook 'ia--fetch-if-cache-empty)
+    (advice-remove 'select-window #'ia--refresh-on-external-change))))
 
 (provide 'inline-annotate)
 ;;; inline-annotate.el ends here
