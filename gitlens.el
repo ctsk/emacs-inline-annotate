@@ -11,6 +11,8 @@
 (defconst gitlens--min-indent 90)
 (defconst gitlens--eol-offset 10)
 (defconst gitlens--eob-offset 5)
+(defconst gitlens--idle-delay 1)
+(defconst gitlens--not-committed-hash "0000000000000000000000000000000000000000")
 
 (defvar-local gitlens--line-lookup        nil)
 (defvar-local gitlens--hash-table         nil)
@@ -35,11 +37,8 @@
 ;;   (string-to-number (substring key 0 8) 16))
 
 (defface gitlens-face
-  '((t :foreground "#7a88cf"
-       :background nil
-       :italic t))
-  "Face for blamer info."
-  :group 'blamer)
+  '((default :foreground "#7a88cf"))
+  "Face for blamer info.")
 
 (defun gitlens--clear-overlays ()
   "Delete all overlays in the current buffer."
@@ -47,12 +46,51 @@
   (dolist (ov gitlens--overlays)
     (delete-overlay ov)))
 
+(defun gitlens--make-overlay ()
+  "Create a new overlay."
+  (let* ((line-end (line-end-position))
+         (new-ov   (make-overlay line-end line-end nil t t)))
+    (overlay-put new-ov 'intangible t)
+    (setq gitlens--overlays (cons new-ov gitlens--overlays))))
+
+
+(defun gitlens--prettify-time (commit-ts)
+  "Pretty print the COMMIT-TS."
+  (let* ((current-decoded  (decode-time (current-time)))
+         (commit-decoded   (decode-time commit-ts))
+         (sec-diff    (- (time-convert (current-time) 'integer) commit-ts))
+         (year-diff   (- (decoded-time-year  current-decoded)
+                         (decoded-time-year  commit-decoded)))
+         (month-diff  (- (decoded-time-month current-decoded)
+                         (decoded-time-month commit-decoded))))
+    (cond ((< sec-diff 60)        "seconds ago")
+          ((< sec-diff 120)       "One minute ago")
+          ((< sec-diff 3600)      (format "%s minutes ago" (/ sec-diff 60)))
+          ((< sec-diff 7200)      "One hour ago")
+          ((< sec-diff 86400)     (format "%s hours ago"   (/ sec-diff 3600)))
+          ((< sec-diff 172800)    "Yesterday")
+          ((< sec-diff 604800)    (format "%s days ago"    (/ sec-diff 86400)))
+          ((< sec-diff 1209600)   "Last week")
+          ((< sec-diff 2592000)   (format "%s weeks ago"   (/ sec-diff 604800)))
+          ((> year-diff  1)       (format "%s years ago"   year-diff))
+          ((= year-diff  1)       "Last year")
+          ((> month-diff 1)       (format "%s months ago"  month-diff))
+          (t                      "Last month"))))
+
+(defun gitlens--format-uncommitted ()
+  "What to display when the change hasn't been commited yet."
+  (propertize "You ⟐ Not Committed Yet"
+              'face `(:inherit (gitlens-face))
+              'cursor t))
+
 (defun gitlens--format-commit (commit)
   "Format the COMMIT."
   (let ((summary (commit-summary commit))
-        (author  (commit-author  commit)))
-    (propertize (concat author " ⟐ " summary)
+        (author  (commit-author  commit))
+        (commit-t))
+    (propertize (concat " ⟐ " author " ⟐ " summary)
                 'face `(:inherit (gitlens-face))
+                'intangible t
                 'cursor t)))
 
 (defun gitlens--invalidate ()
@@ -99,9 +137,18 @@
 
      (when (< line-idx (length gitlens--line-lookup))
        (let* ((commit-id      (aref gitlens--line-lookup line-idx))
-              (commit         (gethash commit-id gitlens--hash-table)))
-          (overlay-put overlay 'after-string
-                     (concat left-pad (gitlens--format-commit commit)))))))
+              (commit         (gethash commit-id gitlens--hash-table))
+              (str
+               (concat left-pad
+                       (if (string= commit-id gitlens--not-committed-hash)
+                          (gitlens--format-uncommitted)
+                          (gitlens--format-commit commit)))))
+         (overlay-put overlay 'intangible  t)
+         (overlay-put overlay
+                      'after-string (propertize str
+                                               'face `(:inherit (gitlens-face))
+                                               'intangible t
+                                               'cursor t))))))
 
 (defun gitlens--annotate-multiple ()
   "Add overlays for a line or a region."
@@ -134,9 +181,7 @@
               (cl-incf cur-line)))
           (while (and (<= (point) end))
             (unless nil ;; (aref gitlens--active-lines-bv cur-line)
-              (setq gitlens--overlays
-                    (cons (make-overlay (line-end-position) (line-end-position))
-                          gitlens--overlays))
+              (gitlens--make-overlay)
               (gitlens--annotate (car gitlens--overlays)))
             (next-logical-line)))))
             ;;(cl-incf cur-line)))))
@@ -147,9 +192,7 @@
         (move-overlay   ov line-end line-end)
         (gitlens--annotate (car gitlens--overlays)))
       (gitlens--annotate
-       (car (setq gitlens--overlays (cons (make-overlay (line-end-position)
-                                                        (line-end-position))
-                                         gitlens--overlays)))))))
+       (car (gitlens--make-overlay))))))
 
 (defun gitlens--store (result)
   "Store the RESULT if it's still valid."
@@ -206,7 +249,6 @@ When buffer is nil, use the current buffer."
   (if (gitlens--should-display)
     (gitlens--annotate-multiple)
     (gitlens--clear-overlays)))
-    
 
 (defun gitlens--idle-callback ()
   "Fetch annotations for the current buffer while idle."
@@ -222,9 +264,7 @@ When buffer is nil, use the current buffer."
 (defun gitlens--init ()
   "Start the idle timer."
   (interactive)
-  ;; (unless (member 'gitlens--change-callback after-change-functions)
-  ;;    (add-hook 'after-change-functions 'gitlens--change-callback))
-  (run-with-idle-timer 5 t 'gitlens--idle-callback))
+  (run-with-idle-timer gitlens--idle-delay t 'gitlens--idle-callback))
 
 (provide 'gitlens)
 ;;; gitlens.el ends here
