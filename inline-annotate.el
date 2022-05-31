@@ -1,6 +1,8 @@
 ;;; inline-annotate.el --- Show git blame info about the current line         -*- lexical-binding: t; -*-
 ;;; Commentary:
-;; Heavily inspired by the VSCode's gitlens plygin and blamer.el
+;; Display the last change that touched the current line at the end of the line
+;;
+;; -- Heavily inspired by the VSCode's gitlens plygin and blamer.el
 ;;; Code:
 
 (require 'vc)
@@ -15,6 +17,8 @@
 (defconst ia--idle-delay 1)
 (defconst ia--not-committed-hash
   "0000000000000000000000000000000000000000")
+(defconst ia--uncommitted-format-string "You · Not Committed Yet")
+(defconst ia--committed-format-string "%s · %s · %s")
 
 (defvar-local ia--line-lookup        nil)
 (defvar-local ia--hash-table         nil)
@@ -23,21 +27,8 @@
 (defvar-local ia--line-active-lookup nil)
 (defvar-local ia--is-fetching        nil)
 (defvar-local ia--overlays           nil)
-(defvar-local ia--generation         0)
 ;; Track a generation number to detect and ignore out-of-date async fetches
-
-(defvar ia--idle-timer nil)
-
-;; Hashless hash table
-;; Idea: We don't need to rehash the git commit hashes
-;;
-;; (probably not worth it, we barely beat sxhash performance)
-;;
-;; (defun ia--hash-test (key1 key2)
-;;   (string= key1 key2))
-;;
-;; (defun ia--hash-hash (key)
-;;   (string-to-number (substring key 0 8) 16))
+(defvar-local ia--generation         0)
 
 (defgroup inline-annotate nil
   "Show commit info at the end of a current line."
@@ -112,7 +103,7 @@
 
 (defun ia--format-uncommitted ()
   "What to display when the change hasn't been commited yet."
-  (propertize "You ⟐ Not Committed Yet"
+  (propertize ia--uncommitted-format-string
               'face `(:inherit (inline-annotate-face))
               'intangible t
               'cursor t))
@@ -124,7 +115,7 @@
         (commit-ts (ia--prettify-time (commit-author-time commit))))
     (when (string= author ia--user-name)
       (setq author "You"))
-    (propertize (concat author " ⟐ " commit-ts " ⟐ " summary)
+    (propertize (format ia--committed-format-string author commit-ts summary)
                 'face `(:inherit (inline-annotate-face))
                 'intangible t
                 'cursor t)))
@@ -277,8 +268,7 @@ When buffer is nil, use the current buffer."
 
 (defun ia--fetch-if-cache-empty ()
   "Fetch annotations for the current buffer while idle."
-  (when (and (ia--should-fetch)
-             (not (ia--has-cache)))
+  (when (and (ia--should-fetch))
     (ia--fetch 'ia--fetch-callback)))
 
 ;;;###autoload
