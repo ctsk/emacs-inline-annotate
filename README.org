@@ -1,7 +1,26 @@
 * Inline-Annotate
 
-A (small) Emacs package that adds information about past modifications to the end of the current line. Focused on being fast & uses async to avoid hanging the GUI.
+A (small) Emacs package that adds information about past modifications to the
+ end of the current line. Focused on being fast & uses async to avoid hanging the GUI.
 
 See also: VSCode's gitlens plugin, [[https://github.com/Artawower/blamer.el][blamer.el]]
 
-[Instructions to follow]
+*** Installation
+
+- Using =Doom Emacs=
+
+=$DOOMDIR/packages.el=
+  #+begin_src elisp
+(package! inline-annotate
+  :recipe (:host github :repo "ctsk/emacs-inline-annotate"))
+  #+end_src
+
+*** Usage
+
+- Enable for the current buffer:
+
+  =(inline-annotate-mode)=
+
+- Enable globally:
+
+  =(global-inline-annotate-mode)=
