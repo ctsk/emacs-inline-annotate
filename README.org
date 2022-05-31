@@ -1,0 +1,13 @@
+* Annotate the current line with information from the last commit
+
+** TODO Format the commit information
+*** [ ] Show Author and Timestamp
+*** [ ] Timestamp: Pretty print (e.g. Yesterday, 1 week ago, 1 year ago ....)
+*** [ ] Author: Display "You" instead of own name
+*** [ ] Better handle uncommitted changes
+** TODO Make overlay *truly* intangible
+*** [ ] Sometimes the cursor still jumps to the overlay, that shouldn't happen
+** TODO Easy way to open up commit in side buffer
+- Note: Magit can do this
+** TODO Avoid excessive rearranging of overlays when annotating a region
+** TODO Fix: Bug - Region highlight not working when cursor is on empty line
