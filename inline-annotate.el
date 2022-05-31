@@ -16,8 +16,6 @@
 (defconst inline-annotate--not-committed-hash
   "0000000000000000000000000000000000000000")
 
-(defvar inline-annotate--paths nil)
-
 (defvar-local inline-annotate--line-lookup        nil)
 (defvar-local inline-annotate--hash-table         nil)
 (defvar-local inline-annotate--user-name          nil)
@@ -26,8 +24,9 @@
 (defvar-local inline-annotate--overlays           nil)
 (defvar-local inline-annotate--generation         0)
 ;; Track a generation number to detect and ignore out-of-date async fetches
-(defvar-local inline-annotate--active             nil)
 (defvar-local inline-annotate--hooked             nil)
+
+(defvar inline-annotate--idle-timer nil)
 
 ;; Hashless hash table
 ;; Idea: We don't need to rehash the git commit hashes
@@ -140,7 +139,7 @@
 
 (defun inline-annotate--has-cache ()
   "Return t if data is cached."
-  (when (and inline-annotate--hash-table inline-annotate--line-lookup) t))
+  (and inline-annotate--hash-table inline-annotate--line-lookup))
 
 (defun inline-annotate--current-line-empty-p ()
   "Is the current line empty?"
@@ -153,7 +152,7 @@
   (and (eq (vc-backend (buffer-file-name)) 'Git)
        (not (buffer-modified-p))
        (not (inline-annotate--has-cache))
-       (or inline-annotate-mode global-inline-annotate-mode)))
+       inline-annotate-mode))
 
 (defun inline-annotate--should-display ()
   "Decide whether inline-annotate should annotate the current buffer."
@@ -163,8 +162,7 @@
        (inline-annotate--has-cache)
        (not (buffer-modified-p))
        (not (= (point) (point-max)))
-       (or inline-annotate-mode global-inline-annotate-mode)))
-       ;; (not (inline-annotate--current-line-empty-p))))
+       inline-annotate-mode))
 
 (defun inline-annotate--annotate (overlay)
   "Fill OVERLAY with commit data."
@@ -246,7 +244,7 @@
   "Draw Overlays with  RESULT data. GEN represents the age of the result."
   (when (= gen inline-annotate--generation) ;;fetch is still up to date
     (inline-annotate--store result)
-    (inline-annotate--post-command-callback)))
+    (inline-annotate--display-cached-data)))
 
 (defun inline-annotate--fetch (callback)
   "Async-fetch git blame info for the current buffer, call CALLBACK when done.
@@ -258,7 +256,10 @@ When buffer is nil, use the current buffer."
                (line-count   (count-lines (point-min) (point-max)))
                (my-gen       inline-annotate--generation)
                (buffer       (buffer-name))
-               (paths        inline-annotate--paths))
+               (paths        (list (locate-library "parsec")
+                                   (locate-library "inline-annotate-parser")
+                                   (locate-library "inline-annotate-async"))))
+      (message (number-to-string (length paths)))
       (setq inline-annotate--is-fetching t)
       (unwind-protect
         (async-start
@@ -280,33 +281,22 @@ When buffer is nil, use the current buffer."
                 (funcall callback (cdr result) my-gen)))))
         (setq inline-annotate--is-fetching nil)))))
 
-(defun inline-annotate--change-callback (_start _end _pre)
+(defun inline-annotate--clear-display-and-invalidate-cache (_start _end _pre)
   "Reset inline-annotate on file change."
-  (when inline-annotate--active
-    (message "Inline-Annotate: Cleaning up and invalidating cache.")
-    (inline-annotate--clear-overlays)
-    (inline-annotate--invalidate)))
+  (inline-annotate--clear-overlays)
+  (inline-annotate--invalidate))
 
-(defun inline-annotate--post-command-callback ()
+(defun inline-annotate--display-cached-data ()
   "Display Inline-Annotate information."
   (if (inline-annotate--should-display)
     (inline-annotate--annotate-multiple)
     (inline-annotate--clear-overlays)))
 
-(defun inline-annotate--idle-callback ()
+(defun inline-annotate--fetch-if-cache-empty ()
   "Fetch annotations for the current buffer while idle."
-  (when (inline-annotate--should-fetch)
-    (setq inline-annotate--active t)
-    (unless inline-annotate--hooked
-      (add-hook 'after-change-functions 'inline-annotate--change-callback)
-      (add-hook 'post-command-hook 'inline-annotate--post-command-callback)
-      (setq inline-annotate--hooked t))
-    (unless (inline-annotate--has-cache)
-      (inline-annotate--fetch 'inline-annotate--fetch-callback))))
-
-(defun inline-annotate--init ()
-  "Start the idle timer."
-  (run-with-idle-timer inline-annotate--idle-delay t 'inline-annotate--idle-callback))
+  (when (and (inline-annotate--should-fetch)
+             (not (inline-annotate--has-cache)))
+    (inline-annotate--fetch 'inline-annotate--fetch-callback)))
 
 ;;;###autoload
 (define-minor-mode inline-annotate-mode
@@ -322,24 +312,16 @@ When buffer is nil, use the current buffer."
         inline-annotate--is-fetching        nil
         inline-annotate--overlays           nil
         inline-annotate--generation         0
-        inline-annotate--active             nil
         inline-annotate--hooked             nil)
-
-  (unless inline-annotate--paths
-    (setq inline-annotate--paths
-          (list (locate-library "parsec")
-                (locate-library "inline-annotate-parser")
-                (locate-library "inline-annotate-async"))))
-
-  (inline-annotate--init))
-
-;;;###autoload
-(define-global-minor-mode
-  global-inline-annotate-mode
-  inline-annotate-mode
-  (lambda ()
-    (unless inline-annotate-mode
-      (inline-annotate-mode))))
+  (cond
+   (inline-annotate-mode
+    (add-hook 'after-change-functions 'inline-annotate--clear-display-and-invalidate-cache)
+    (add-hook 'post-command-hook 'inline-annotate--display-cached-data)
+    (add-hook 'after-save-hook 'inline-annotate--fetch-if-cache-empty))
+   (t
+    (remove-hook 'after-change-functions 'inline-annotate--clear-display-and-invalidate-cache)
+    (remove-hook 'post-command-hook 'inline-annotate--display-cached-data)
+    (remove-hook 'after-save-hook 'inline-annotate--fetch-if-cache-empty))))
 
 (provide 'inline-annotate)
 ;;; inline-annotate.el ends here
