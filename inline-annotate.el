@@ -1,6 +1,6 @@
 ;;; inline-annotate.el --- Show git blame info about the current line         -*- lexical-binding: t; -*-
 ;;; Commentary:
-;; Heavily inspired by the VSCode inline-annotate project and blamer.el
+;; Heavily inspired by the VSCode's gitlens plygin and blamer.el
 ;;; Code:
 
 (require 'vc)
@@ -15,6 +15,8 @@
 (defconst inline-annotate--idle-delay 1)
 (defconst inline-annotate--not-committed-hash
   "0000000000000000000000000000000000000000")
+
+(defvar inline-annotate--paths nil)
 
 (defvar-local inline-annotate--line-lookup        nil)
 (defvar-local inline-annotate--hash-table         nil)
@@ -237,7 +239,8 @@
     (message "Inline-Annotate: Caching result.")
     (setq inline-annotate--hash-table         (car result)
           inline-annotate--line-lookup        (cdr result)
-          inline-annotate--line-active-lookup (make-vector (length (cdr result)) nil))))
+          inline-annotate--line-active-lookup
+          (make-vector (length (cdr result)) nil))))
 
 (defun inline-annotate--fetch-callback (result gen)
   "Draw Overlays with  RESULT data. GEN represents the age of the result."
@@ -254,22 +257,28 @@ When buffer is nil, use the current buffer."
     (when-let ((file-name    (buffer-file-name))
                (line-count   (count-lines (point-min) (point-max)))
                (my-gen       inline-annotate--generation)
-               (buffer       (buffer-name)))
+               (buffer       (buffer-name))
+               (paths        inline-annotate--paths))
       (setq inline-annotate--is-fetching t)
-      (async-start
-        (lambda ()
-          (let ((is-incremental t))
-            (when-let  ((blame-info (inline-annotate-async--get-blame-info
-                                             file-name is-incremental)))
-              (cons (inline-annotate-async--get-user-name)
-               (inline-annotate-parser--parse blame-info line-count is-incremental)))))
-        (lambda (result)
-          (message "Inline-Annotate: Received result.")
-          (with-current-buffer buffer
-            (setq inline-annotate--is-fetching nil)
-            (when result
-              (setq inline-annotate--user-name (string-trim (car result)))
-              (funcall callback (cdr result) my-gen))))))))
+      (unwind-protect
+        (async-start
+          (lambda ()
+            (dolist (path paths)
+              (load-file path))
+            (let ((is-incremental t))
+              (when-let  ((blame-info (inline-annotate-async--get-blame-info
+                                               file-name is-incremental)))
+                (cons (inline-annotate-async--get-user-name)
+                 (inline-annotate-parser--parse blame-info
+                                                line-count is-incremental)))))
+          (lambda (result)
+            (message "Inline-Annotate: Received result.")
+            (with-current-buffer buffer
+              (setq inline-annotate--is-fetching nil)
+              (when result
+                (setq inline-annotate--user-name (string-trim (car result)))
+                (funcall callback (cdr result) my-gen)))))
+        (setq inline-annotate--is-fetching nil)))))
 
 (defun inline-annotate--change-callback (_start _end _pre)
   "Reset inline-annotate on file change."
@@ -315,6 +324,13 @@ When buffer is nil, use the current buffer."
         inline-annotate--generation         0
         inline-annotate--active             nil
         inline-annotate--hooked             nil)
+
+  (unless inline-annotate--paths
+    (setq inline-annotate--paths
+          (list (locate-library "parsec")
+                (locate-library "inline-annotate-parser")
+                (locate-library "inline-annotate-async"))))
+
   (inline-annotate--init))
 
 ;;;###autoload
