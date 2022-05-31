@@ -138,6 +138,11 @@
   "Parse output of git blame --incremental as STR and NUM-LINES the number of lines in the buffer."
   (gitlens-parser--abstract-parse str num-lines 'gitlens-parser--incremental-parse-commit))
 
+(defun gitlens-parser--parse (str num-lines incremental)
+  "Parse STR. NUM-LINES upper bound for number of lines in str, Use INCREMENTAL strategy if set."
+  (if incremental
+      (gitlens-parser--incremental-parse str num-lines)
+      (gitlens-parser--porcelain-parse str num-lines)))
 
 (provide 'gitlens-parser)
 ;;; gitlens-parser.el ends here
